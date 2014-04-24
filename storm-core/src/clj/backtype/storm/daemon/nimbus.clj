@@ -498,13 +498,16 @@
         all-supervisor-details (into {} (for [[sid supervisor-info] supervisor-infos
                                               :let [hostname (:hostname supervisor-info)
                                                     scheduler-meta (:scheduler-meta supervisor-info)
+													cpu (:cpu supervisor-info)
+													mem (:mem supervisor-info)
                                                     dead-ports (supervisor->dead-ports sid)
                                                     ;; hide the dead-ports from the all-ports
                                                     ;; these dead-ports can be reused in next round of assignments
                                                     all-ports (-> (get all-scheduling-slots sid)
                                                                   (set/difference dead-ports)
+																  ((fn [ports] (log-message "PORTS" (str ports)) ports))
                                                                   ((fn [ports] (map int ports))))
-                                                    supervisor-details (SupervisorDetails. sid hostname scheduler-meta all-ports)]]
+                                                    supervisor-details (SupervisorDetails. sid hostname scheduler-meta all-ports cpu mem)]]
                                           {sid supervisor-details}))]
     (merge all-supervisor-details 
            (into {}

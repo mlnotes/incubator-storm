@@ -21,7 +21,11 @@ import java.util.Collection;
 import java.util.HashSet;
 import java.util.Set;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 public class SupervisorDetails {
+	public static Logger LOG = LoggerFactory.getLogger(SupervisorDetails.class);
 
     String id;
     /**
@@ -37,6 +41,11 @@ public class SupervisorDetails {
      * all the ports of the supervisor
      */
     Set<Integer> allPorts;
+
+
+	Long cpu;
+	Long mem;
+
 
     public SupervisorDetails(String id, Object meta){
         this.id = id;
@@ -57,6 +66,18 @@ public class SupervisorDetails {
 
         setAllPorts(allPorts);
     }
+	
+    public SupervisorDetails(String id, String host, Object schedulerMeta, Collection<Number> allPorts, Long cpu, Long mem){
+        this.id = id;
+        this.host = host;
+        this.schedulerMeta = schedulerMeta;
+		this.cpu = cpu;
+		this.mem = mem;
+
+        setAllPorts(allPorts);
+    
+		LOG.info(String.format("CPU: %d, Mem: %d\n", cpu, mem));
+	}
 
     private void setAllPorts(Collection<Number> allPorts) {
         this.allPorts = new HashSet<Integer>();
@@ -86,4 +107,12 @@ public class SupervisorDetails {
     public Object getSchedulerMeta() {
         return this.schedulerMeta;
     }
+
+	public Long getCpu() {
+		return this.cpu;
+	}
+
+	public Long getMem() {
+		return this.mem;
+	}
 }

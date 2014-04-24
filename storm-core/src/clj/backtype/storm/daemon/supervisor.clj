@@ -27,6 +27,7 @@
 (defmulti launch-worker (fn [supervisor & _] (cluster-mode (:conf supervisor))))
 
 ;; used as part of a map from port to this
+
 (defrecord LocalAssignment [storm-id executors])
 
 (defprotocol SupervisorDaemon
@@ -375,7 +376,9 @@
                                                 ;; used ports
                                                 (.getMetadata isupervisor)
                                                 (conf SUPERVISOR-SCHEDULER-META)
-                                                ((:uptime supervisor)))))]
+                                                ((:uptime supervisor))
+												99
+												66882023488)))]
     (heartbeat-fn)
     ;; should synchronize supervisor so it doesn't launch anything after being down (optimization)
     (schedule-recurring (:timer supervisor)
@@ -390,7 +393,7 @@
                           0
                           (conf SUPERVISOR-MONITOR-FREQUENCY-SECS)
                           (fn [] (.add processes-event-manager sync-processes))))
-    (log-message "Starting supervisor with id " (:supervisor-id supervisor) " at host " (:my-hostname supervisor))
+    (log-message "Starting supervisor with id ZHFZHFZHF " (:supervisor-id supervisor) " at host " (:my-hostname supervisor))
     (reify
      Shutdownable
      (shutdown [this]

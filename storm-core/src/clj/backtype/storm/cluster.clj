@@ -66,7 +66,8 @@
                  (swap! callbacks dissoc id))
 
      (set-ephemeral-node [this path data]
-                         (zk/mkdirs zk (parent-path path))
+                         (log-message "ZZZHHH SupervisorInfo Data, Path:" path)
+						 (zk/mkdirs zk (parent-path path))
                          (if (zk/exists zk path false)
                            (try-cause
                              (zk/set-data zk path data) ; should verify that it's ephemeral

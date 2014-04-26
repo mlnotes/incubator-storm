@@ -20,13 +20,12 @@ package backtype.storm.scheduler;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.Set;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public class SupervisorDetails {
-	public static Logger LOG = LoggerFactory.getLogger(SupervisorDetails.class);
-
+    public static Logger LOG = LoggerFactory.getLogger(SupervisorDetails.class);
+    
     String id;
     /**
      * hostname of this supervisor
@@ -41,11 +40,9 @@ public class SupervisorDetails {
      * all the ports of the supervisor
      */
     Set<Integer> allPorts;
-
-
-	Long cpu;
-	Long mem;
-
+    
+    Double cpu;
+    Long mem;
 
     public SupervisorDetails(String id, Object meta){
         this.id = id;
@@ -66,18 +63,18 @@ public class SupervisorDetails {
 
         setAllPorts(allPorts);
     }
-	
-    public SupervisorDetails(String id, String host, Object schedulerMeta, Collection<Number> allPorts, Long cpu, Long mem){
+    
+    public SupervisorDetails(String id, String host, Object schedulerMeta, Collection<Number> allPorts, Double cpu, Long mem){
         this.id = id;
         this.host = host;
         this.schedulerMeta = schedulerMeta;
-		this.cpu = cpu;
-		this.mem = mem;
+        this.cpu = cpu;
+        this.mem = mem;
 
         setAllPorts(allPorts);
-    
-		LOG.info(String.format("CPU: %d, Mem: %d\n", cpu, mem));
-	}
+        
+        LOG.info(String.format("host: %s, Cpu: %f, Mem: %d", host, cpu, mem));
+    }
 
     private void setAllPorts(Collection<Number> allPorts) {
         this.allPorts = new HashSet<Integer>();
@@ -108,11 +105,11 @@ public class SupervisorDetails {
         return this.schedulerMeta;
     }
 
-	public Long getCpu() {
-		return this.cpu;
-	}
+    public Double getCpu() {
+        return cpu;
+    }
 
-	public Long getMem() {
-		return this.mem;
-	}
+    public Long getMem() {
+        return mem;
+    }
 }

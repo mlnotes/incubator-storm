@@ -54,6 +54,7 @@ public class SystemStatus {
         } catch (SigarException ex) {
             LOG.error("can't get memory status", ex);
         }
+        LOG.info(status.toString());
         return status;
     }
     
@@ -71,6 +72,7 @@ public class SystemStatus {
             LOG.error("can't get cput status", ex);
         }
         
+        LOG.info(status.toString());
         return status;
     }
     

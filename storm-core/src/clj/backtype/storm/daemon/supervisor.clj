@@ -15,6 +15,7 @@
 ;; limitations under the License.
 (ns backtype.storm.daemon.supervisor
   (:import [backtype.storm.scheduler ISupervisor])
+  (:import [backtype.storm.utils SystemStatus CpuStatus MemoryStatus])
   (:use [backtype.storm bootstrap])
   (:use [backtype.storm.daemon common])
   (:require [backtype.storm.daemon [worker :as worker]])
@@ -366,7 +367,10 @@
         [event-manager processes-event-manager :as managers] [(event/event-manager false) (event/event-manager false)]                         
         sync-processes (partial sync-processes supervisor)
         synchronize-supervisor (mk-synchronize-supervisor supervisor sync-processes event-manager processes-event-manager)
-        heartbeat-fn (fn [] (.supervisor-heartbeat!
+        system-status (SystemStatus/getInstance)
+		cpu-status (.getCpuStatus system-status)
+		mem-status (.getMemoryStatus system-status)
+		heartbeat-fn (fn [] (.supervisor-heartbeat!
                                (:storm-cluster-state supervisor)
                                (:supervisor-id supervisor)
                                (SupervisorInfo. (current-time-secs)
@@ -377,8 +381,8 @@
                                                 (.getMetadata isupervisor)
                                                 (conf SUPERVISOR-SCHEDULER-META)
                                                 ((:uptime supervisor))
-												99
-												66882023488)))]
+												(.getIdle cpu-status)
+												(.getUsed mem-status))))]
     (heartbeat-fn)
     ;; should synchronize supervisor so it doesn't launch anything after being down (optimization)
     (schedule-recurring (:timer supervisor)

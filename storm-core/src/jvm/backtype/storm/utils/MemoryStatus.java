@@ -16,17 +16,22 @@
 
 package backtype.storm.utils;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 /**
  *
  * @author Zhu Hanfeng <me@mlnotes.com>
  * @date 2014-4-26 8:58:41
  */
 public class MemoryStatus {
-    private Long total;
+    public static Logger LOG = LoggerFactory.getLogger(MemoryStatus.class);
+    
+	private Long total;
     private Long used;
 
     public Long getTotal() {
-        return total;
+       	LOG.info(this.toString()); 
+		return total;
     }
 
     public void setTotal(Long total) {

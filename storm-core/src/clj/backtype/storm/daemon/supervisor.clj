@@ -382,6 +382,7 @@
                                                 (conf SUPERVISOR-SCHEDULER-META)
                                                 ((:uptime supervisor))
 												(.getIdle cpu-status)
+												(.getTotal mem-status)
 												(.getUsed mem-status))))]
     (heartbeat-fn)
     ;; should synchronize supervisor so it doesn't launch anything after being down (optimization)

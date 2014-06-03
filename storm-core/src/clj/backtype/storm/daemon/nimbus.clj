@@ -499,7 +499,8 @@
                                               :let [hostname (:hostname supervisor-info)
                                                     scheduler-meta (:scheduler-meta supervisor-info)
 													cpu (:cpu supervisor-info)
-													mem (:mem supervisor-info)
+													total-mem (:total-mem supervisor-info)
+													used-mem (:used-mem supervisor-info)
                                                     dead-ports (supervisor->dead-ports sid)
                                                     ;; hide the dead-ports from the all-ports
                                                     ;; these dead-ports can be reused in next round of assignments
@@ -507,7 +508,7 @@
                                                                   (set/difference dead-ports)
 																  ((fn [ports] (log-message "PORTS" (str ports)) ports))
                                                                   ((fn [ports] (map int ports))))
-                                                    supervisor-details (SupervisorDetails. sid hostname scheduler-meta all-ports cpu mem)]]
+                                                    supervisor-details (SupervisorDetails. sid hostname scheduler-meta all-ports cpu total-mem used-mem)]]
                                           {sid supervisor-details}))]
     (merge all-supervisor-details 
            (into {}

@@ -42,7 +42,8 @@ public class SupervisorDetails {
     Set<Integer> allPorts;
     
     Double cpu;
-    Long mem;
+    Long totalMem;
+	Long usedMem;
 
     public SupervisorDetails(String id, Object meta){
         this.id = id;
@@ -64,16 +65,19 @@ public class SupervisorDetails {
         setAllPorts(allPorts);
     }
     
-    public SupervisorDetails(String id, String host, Object schedulerMeta, Collection<Number> allPorts, Double cpu, Long mem){
+    public SupervisorDetails(String id, String host, Object schedulerMeta, Collection<Number> allPorts, 
+						Double cpu, Long totalMem, Long usedMem){
         this.id = id;
         this.host = host;
         this.schedulerMeta = schedulerMeta;
         this.cpu = cpu;
-        this.mem = mem;
+        this.totalMem = totalMem;
+		this.usedMem = usedMem;
 
         setAllPorts(allPorts);
         
-        LOG.info(String.format("host: %s, Cpu: %f, Mem: %d", host, cpu, mem));
+        LOG.info(String.format("host: %s, Cpu: %f, TotalMem: %d, UsedMem: %d", 
+						host, cpu, totalMem, usedMem));
     }
 
     private void setAllPorts(Collection<Number> allPorts) {
@@ -109,7 +113,11 @@ public class SupervisorDetails {
         return cpu;
     }
 
-    public Long getMem() {
-        return mem;
+    public Long getTotalMem() {
+        return totalMem;
     }
+
+	public Long getUsedMem() {
+		return usedMem;
+	}
 }

@@ -368,9 +368,9 @@
         sync-processes (partial sync-processes supervisor)
         synchronize-supervisor (mk-synchronize-supervisor supervisor sync-processes event-manager processes-event-manager)
         system-status (SystemStatus/getInstance)
-		cpu-status (.getCpuStatus system-status)
-		mem-status (.getMemoryStatus system-status)
-		heartbeat-fn (fn [] (.supervisor-heartbeat!
+		heartbeat-fn (fn [] (let [cpu-status (.getCpuStatus system-status)
+							  	  mem-status (.getMemoryStatus system-status)]
+							  (.supervisor-heartbeat!
                                (:storm-cluster-state supervisor)
                                (:supervisor-id supervisor)
                                (SupervisorInfo. (current-time-secs)
@@ -383,8 +383,9 @@
                                                 ((:uptime supervisor))
 												(.getIdle cpu-status)
 												(.getTotal mem-status)
-												(.getUsed mem-status))))]
-    (heartbeat-fn)
+												(.getUsed mem-status)
+												))))]
+	(heartbeat-fn)
     ;; should synchronize supervisor so it doesn't launch anything after being down (optimization)
     (schedule-recurring (:timer supervisor)
                         0

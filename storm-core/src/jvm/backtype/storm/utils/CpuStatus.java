@@ -16,12 +16,15 @@
 
 package backtype.storm.utils;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 /**
  *
  * @author Zhu Hanfeng <me@mlnotes.com>
  * @date 2014-4-26 11:01:00
  */
 public class CpuStatus {
+    public static Logger LOG = LoggerFactory.getLogger(CpuStatus.class);
     private Integer cpus;
     private Double idle;
 
@@ -34,7 +37,8 @@ public class CpuStatus {
     }
 
     public Double getIdle() {
-        return idle;
+       	LOG.info(this.toString()); 
+		return idle;
     }
 
     public void setIdle(Double idle) {

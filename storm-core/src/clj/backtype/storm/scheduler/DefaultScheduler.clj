@@ -14,7 +14,7 @@
 ;; See the License for the specific language governing permissions and
 ;; limitations under the License.
 (ns backtype.storm.scheduler.DefaultScheduler
-  (:use [backtype.storm util config])
+  (:use [backtype.storm util config log])
   (:require [backtype.storm.scheduler.EvenScheduler :as EvenScheduler])
   (:import [backtype.storm.scheduler IScheduler Topologies
             Cluster TopologyDetails WorkerSlot SchedulerAssignment
@@ -52,6 +52,7 @@
   )
 
 (defn default-schedule [^Topologies topologies ^Cluster cluster]
+  (log-message "Scheduler is called")
   (let [needs-scheduling-topologies (.needsSchedulingTopologies cluster topologies)]
     (doseq [^TopologyDetails topology needs-scheduling-topologies
             :let [topology-id (.getId topology)

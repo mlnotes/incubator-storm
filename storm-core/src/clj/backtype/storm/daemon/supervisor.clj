@@ -300,10 +300,12 @@
           assignments-snapshot (assignments-snapshot storm-cluster-state sync-callback)
           storm-code-map (read-storm-code-locations assignments-snapshot)
           downloaded-storm-ids (set (read-downloaded-storm-ids conf))
+          ;; 读取zk中的assignment
           all-assignment (read-assignments
                            assignments-snapshot
                            (:assignment-id supervisor))
           new-assignment (->> all-assignment
+                              ;; confirmAssigned好像总是返回true
                               (filter-key #(.confirmAssigned isupervisor %)))
           assigned-storm-ids (assigned-storm-ids-from-port-assignments new-assignment)
           existing-assignment (.get local-state LS-LOCAL-ASSIGNMENTS)]
@@ -337,6 +339,7 @@
                                 (set (keys new-assignment)))]
         (.killedWorker isupervisor (int p)))
       (.assigned isupervisor (keys new-assignment))
+      ;; 将新的assignment写入到local state
       (.put local-state
             LS-LOCAL-ASSIGNMENTS
             new-assignment)
@@ -359,18 +362,21 @@
 
 ;; in local state, supervisor stores who its current assignments are
 ;; another thread launches events to restart any dead processes if necessary
+;; isupervisor 是 standalone-supervisor 的实例
 (defserverfn mk-supervisor [conf shared-context ^ISupervisor isupervisor]
   (log-message "Starting Supervisor with conf " conf)
   (.prepare isupervisor conf (supervisor-isupervisor-dir conf))
+  ;; 这里不是清理过本地临时目录了吗？为什么重启supervisor，还会执行原来的topology
   (FileUtils/cleanDirectory (File. (supervisor-tmp-dir conf)))
   (let [supervisor (supervisor-data conf shared-context isupervisor)
         [event-manager processes-event-manager :as managers] [(event/event-manager false) (event/event-manager false)]                         
         sync-processes (partial sync-processes supervisor)
+        ;; 专门读取zk 中 assignment 的处理函数
         synchronize-supervisor (mk-synchronize-supervisor supervisor sync-processes event-manager processes-event-manager)
         system-status (SystemStatus/getInstance)
-		heartbeat-fn (fn [] (let [cpu-status (.getCpuStatus system-status)
-							  	  mem-status (.getMemoryStatus system-status)]
-							  (.supervisor-heartbeat!
+        heartbeat-fn (fn [] (let [cpu-status (.getCpuStatus system-status)
+                                  mem-status (.getMemoryStatus system-status)]
+                               (.supervisor-heartbeat!
                                (:storm-cluster-state supervisor)
                                (:supervisor-id supervisor)
                                (SupervisorInfo. (current-time-secs)
@@ -381,25 +387,28 @@
                                                 (.getMetadata isupervisor)
                                                 (conf SUPERVISOR-SCHEDULER-META)
                                                 ((:uptime supervisor))
-												(.getIdle cpu-status)
-												(.getTotal mem-status)
-												(.getUsed mem-status)
-												))))]
+                                                (.getIdle cpu-status)
+                                                (.getTotal mem-status)
+                                                (.getUsed mem-status)))))]
 	(heartbeat-fn)
     ;; should synchronize supervisor so it doesn't launch anything after being down (optimization)
+    ;; 不断地执行心跳函数
     (schedule-recurring (:timer supervisor)
                         0
                         (conf SUPERVISOR-HEARTBEAT-FREQUENCY-SECS)
                         heartbeat-fn)
+
     (when (conf SUPERVISOR-ENABLE)
       ;; This isn't strictly necessary, but it doesn't hurt and ensures that the machine stays up
       ;; to date even if callbacks don't all work exactly right
+      ;; 同步zk中的数据
       (schedule-recurring (:timer supervisor) 0 10 (fn [] (.add event-manager synchronize-supervisor)))
+      ;; 同步local state 中的数据
       (schedule-recurring (:timer supervisor)
                           0
                           (conf SUPERVISOR-MONITOR-FREQUENCY-SECS)
                           (fn [] (.add processes-event-manager sync-processes))))
-    (log-message "Starting supervisor with id ZHFZHFZHF " (:supervisor-id supervisor) " at host " (:my-hostname supervisor))
+    (log-message "Starting supervisor with id " (:supervisor-id supervisor) " at host " (:my-hostname supervisor))
     (reify
      Shutdownable
      (shutdown [this]

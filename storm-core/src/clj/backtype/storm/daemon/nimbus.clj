@@ -59,6 +59,7 @@
     scheduler
     ))
 
+;; inumbus 是 standalone-nimbus 实例
 (defn nimbus-data [conf inimbus]
   (let [forced-scheduler (.getForcedScheduler inimbus)]
     {:conf conf
@@ -131,6 +132,8 @@
        :executor-overrides executor-overrides
        })))
 
+;; 其实也就是将num-workers 以及 executor信息写入到 zk中
+;; 然后mk-assignments, mk-assignments 完全根据zk中的信息进行？
 (defn do-rebalance [nimbus storm-id status]
   (.update-storm! (:storm-cluster-state nimbus)
                   storm-id
@@ -140,6 +143,7 @@
                     (:num-workers status)))
   (mk-assignments nimbus :scratch-topology-id storm-id))
 
+;; 定义topology的状态转换
 (defn state-transitions [nimbus storm-id status]
   {:active {:inactivate :inactive            
             :activate nil
@@ -177,11 +181,14 @@
 (defn topology-status [nimbus storm-id]
   (-> nimbus :storm-cluster-state (.storm-base storm-id nil) :status))
 
+;; 该函数的原型是 transition! [nimbus storm-id event error-on-no-transition?]
+;; 其中 error-on-no-transition? 的默认值为 false
 (defn transition!
   ([nimbus storm-id event]
      (transition! nimbus storm-id event false))
   ([nimbus storm-id event error-on-no-transition?]
      (locking (:submit-lock nimbus)
+       ;; system-events 是 hash-set
        (let [system-events #{:startup}
              [event & event-args] (if (keyword? event) [event] event)
              status (topology-status nimbus storm-id)]
@@ -200,17 +207,26 @@
                                          (log-message msg))
                                        nil))
                                  )))
+                 ;; 首先获取当前状态下topology可以转换的状态集合
+                 ;; 然后调用get-event,将当前状态集合中的event的值赋给transition
                  transition (-> (state-transitions nimbus storm-id status)
                                 (get (:type status))
                                 (get-event event))
+                 ;; 如果transition是nil或者关键词，则返回一个函数
+                 ;; 该函数不接受参数，且直接返回transition的值
                  transition (if (or (nil? transition)
                                     (keyword? transition))
                               (fn [] transition)
                               transition)
+                 ;; 至此，transition 应该是一个函数
+
+                 ;; 调用获取到的transition
                  new-status (apply transition event-args)
                  new-status (if (keyword? new-status)
                               {:type new-status}
                               new-status)]
+
+             ;; 将新的状态写入到 zk
              (when new-status
                (set-topology-status! nimbus storm-id new-status)))))
        )))
@@ -498,9 +514,9 @@
         all-supervisor-details (into {} (for [[sid supervisor-info] supervisor-infos
                                               :let [hostname (:hostname supervisor-info)
                                                     scheduler-meta (:scheduler-meta supervisor-info)
-													cpu (:cpu supervisor-info)
-													total-mem (:total-mem supervisor-info)
-													used-mem (:used-mem supervisor-info)
+                                                    cpu (:cpu supervisor-info)
+                                                    total-mem (:total-mem supervisor-info)
+                                                    used-mem (:used-mem supervisor-info)
                                                     dead-ports (supervisor->dead-ports sid)
                                                     ;; hide the dead-ports from the all-ports
                                                     ;; these dead-ports can be reused in next round of assignments
@@ -590,16 +606,23 @@
         all-scheduling-slots (->> (all-scheduling-slots nimbus topologies missing-assignment-topologies)
                                   (map (fn [[node-id port]] {node-id #{port}}))
                                   (apply merge-with set/union))
-        
+        ;; 获取所有supervisors，需不需要记录之前的supervisor情况？
+        ;; 这里已经有了所有 supervisor 的信息，是否应该修改 topologies 的并发度？
+        ;; 这里也有所有supervisor的信息，比如cpu/memory之类的，这里应该更改num workers 和 parallelism
         supervisors (read-all-supervisor-details nimbus all-scheduling-slots supervisor->dead-ports)
         cluster (Cluster. (:inimbus nimbus) supervisors topology->scheduler-assignment)
 
         ;; call scheduler.schedule to schedule all the topologies
         ;; the new assignments for all the topologies are in the cluster object.
+        ;; 调用scheduler 的schedule函数来将executor分配给不同的worker
+        ;; 这个下划线是不是代表这个返回值是无效的
         _ (.schedule (:scheduler nimbus) topologies cluster)
         new-scheduler-assignments (.getAssignments cluster)
         ;; add more information to convert SchedulerAssignment to Assignment
         new-topology->executor->node+port (compute-topology->executor->node+port new-scheduler-assignments)]
+
+    ;; log所有的supervisors信息
+    (log-message "All Supervisors: " supervisors)
     ;; print some useful information.
     (doseq [[topology-id executor->node+port] new-topology->executor->node+port
             :let [old-executor->node+port (-> topology-id
@@ -650,6 +673,7 @@
 ;; only keep existing slots that satisfy one of those slots. for rest, reassign them across remaining slots
 ;; edge case for slots with no executor timeout but with supervisor timeout... just treat these as valid slots that can be reassigned to. worst comes to worse the executor will timeout and won't assign here next time around
 (defnk mk-assignments [nimbus :scratch-topology-id nil]
+  (log-message "MAKE ASSIGNMENTS IS CALLED")
   (let [conf (:conf nimbus)
         storm-cluster-state (:storm-cluster-state nimbus)
         ^INimbus inimbus (:inimbus nimbus) 
@@ -667,6 +691,7 @@
                                         (when (or (nil? scratch-topology-id) (not= tid scratch-topology-id))
                                           {tid (.assignment-info storm-cluster-state tid nil)})))
         ;; make the new assignments for topologies
+        ;; 在下面的函数中调用Scheduler.schedule, 但是否先修改 Topologies 的配置呢 ？
         topology->executor->node+port (compute-new-topology->executor->node+port
                                        nimbus
                                        existing-assignments
@@ -1158,6 +1183,7 @@
 
 (defn launch-server! [conf nimbus]
   (validate-distributed-mode! conf)
+  ;; 定义事件处理函数
   (let [service-handler (service-handler conf nimbus)
         options (-> (TNonblockingServerSocket. (int (conf NIMBUS-THRIFT-PORT)))
                     (THsHaServer$Args.)
@@ -1168,6 +1194,7 @@
        server (THsHaServer. (do (set! (. options maxReadBufferBytes)(conf NIMBUS-THRIFT-MAX-BUFFER-SIZE)) options))]
     (.addShutdownHook (Runtime/getRuntime) (Thread. (fn [] (.shutdown service-handler) (.stop server))))
     (log-message "Starting Nimbus server...")
+    ;; 启动thrift服务端
     (.serve server)))
 
 ;; distributed implementation
@@ -1188,10 +1215,12 @@
   )
 
 (defn -launch [nimbus]
+  (log-message "Class of Nimbus " (class nimbus))
   (launch-server! (read-storm-config) nimbus))
 
 (defn standalone-nimbus []
   (reify INimbus
+    ;; prepare 函数什么都没干 ？
     (prepare [this conf local-dir]
       )
     (allSlotsAvailableForScheduling [this supervisors topologies topologies-missing-assignments]
@@ -1209,5 +1238,6 @@
         (.getHost supervisor)))
     ))
 
+;; 入口函数，启动nimbus时，先执行这个函数
 (defn -main []
   (-launch (standalone-nimbus)))

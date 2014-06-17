@@ -55,6 +55,7 @@
                                          (doseq [callback (vals @callbacks)]
                                            (callback type path))))
                                        ))]
+    ;; 实现分布式的 ClusterState
     (reify
      ClusterState
      (register [this callback]
@@ -66,8 +67,7 @@
                  (swap! callbacks dissoc id))
 
      (set-ephemeral-node [this path data]
-                         (log-message "ZZZHHH SupervisorInfo Data, Path:" path)
-						 (zk/mkdirs zk (parent-path path))
+                         (zk/mkdirs zk (parent-path path))
                          (if (zk/exists zk path false)
                            (try-cause
                              (zk/set-data zk path data) ; should verify that it's ephemeral
@@ -235,6 +235,7 @@
                       )))]
     (doseq [p [ASSIGNMENTS-SUBTREE STORMS-SUBTREE SUPERVISORS-SUBTREE WORKERBEATS-SUBTREE ERRORS-SUBTREE]]
       (mkdirs cluster-state p))
+    ;; 实现接口 StormClusterState
     (reify
      StormClusterState
      
@@ -321,14 +322,18 @@
         )
 
       (update-storm! [this storm-id new-elems]
+        ;; 获取zk中该topology的所有信息
         (let [base (storm-base this storm-id nil)
               executors (:component->executors base)
+              ;; 将已有的executors分配和new-elems中的executors分配进行合并
+              ;; num-workers 已经写入到new-elems，因为这就是一个值，不存在合并的问题
               new-elems (update new-elems :component->executors (partial merge executors))]
+          ;; 将new-elems 合并到 base中，并写入zk
           (set-data cluster-state (storm-path storm-id)
                                   (-> base
                                       (merge new-elems)
                                       Utils/serialize))))
-
+      ;; 获取zk中和该storm相关的所有信息
       (storm-base [this storm-id callback]
         (when callback
           (swap! storm-base-callback assoc storm-id callback))

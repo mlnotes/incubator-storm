@@ -20,11 +20,8 @@ package backtype.storm.scheduler;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.Set;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 public class SupervisorDetails {
-    public static Logger LOG = LoggerFactory.getLogger(SupervisorDetails.class);
     
     String id;
     /**
@@ -43,7 +40,7 @@ public class SupervisorDetails {
     
     Double cpu;
     Long totalMem;
-	Long usedMem;
+    Long usedMem;
 
     public SupervisorDetails(String id, Object meta){
         this.id = id;
@@ -75,9 +72,6 @@ public class SupervisorDetails {
 		this.usedMem = usedMem;
 
         setAllPorts(allPorts);
-        
-        LOG.info(String.format("host: %s, Cpu: %f, TotalMem: %d, UsedMem: %d", 
-						host, cpu, totalMem, usedMem));
     }
 
     private void setAllPorts(Collection<Number> allPorts) {
@@ -116,8 +110,14 @@ public class SupervisorDetails {
     public Long getTotalMem() {
         return totalMem;
     }
-
-	public Long getUsedMem() {
-		return usedMem;
-	}
+    
+    public Long getUsedMem() {
+        return usedMem;
+    }
+    
+    @Override
+    public String toString(){
+        return String.format("host: %s, Cpu: %f, TotalMem: %d, UsedMem: %d", 
+				host, cpu, totalMem, usedMem);
+    }
 }

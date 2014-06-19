@@ -54,4 +54,14 @@ public class Topologies {
     public Collection<TopologyDetails> getTopologies() {
         return this.topologies.values();
     }
+    
+    @Override
+    public String toString(){
+        String result = "[";
+        for(TopologyDetails t : this.topologies.values()){
+            result += t.toString();
+        }
+        result += "]";
+        return result;
+    }
 }

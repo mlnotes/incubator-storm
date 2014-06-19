@@ -143,6 +143,40 @@
                     (:num-workers status)))
   (mk-assignments nimbus :scratch-topology-id storm-id))
 
+;; 更新topology的并行化信息 num-workers, component->executors
+;; status 中最多包含两个键值对
+;; num-workers 和 component->executors
+(defn update-parallelism [nimbus storm-id status]
+    (.update-storm! (:storm-cluster-state nimbus)
+                    storm-id
+                    (assoc-non-nil
+                        {:component->executors (:component->executors status)}
+                        :num-workers
+                        (:num-workers status))))
+
+(defn topology-balance [nimbus num-supervisors topology]
+    (if (> num-supervisors (.getNumWorkers topology))
+        ((fn []
+            (log-message "update num workers to " num-supervisors " for " (.getId topology))
+            (update-parallelism nimbus (.getId topology) 
+                {:num-workers num-supervisors})
+            (.setNumWorkers topology num-supervisors)
+        ))
+        (log-message "nothing to chnage for topology " (.getId topology))
+        ))
+
+;; 根据supervisors的信息，自动对所有的topology进行重新调度
+;; 默认在每个supervisors上都占有一个worker
+(defn auto-balance [nimbus topologies supervisors]
+    (let [num-supervisors (count supervisors)]
+          (->> topologies
+               .getTopologies
+               (map (partial topology-balance nimbus num-supervisors))
+               (doall))))
+        
+        
+
+
 ;; 定义topology的状态转换
 (defn state-transitions [nimbus storm-id status]
   {:active {:inactivate :inactive            
@@ -342,6 +376,7 @@
 
 (defn read-topology-details [nimbus storm-id]
   (let [conf (:conf nimbus)
+        ;; 读取zk中该topology节点的所有信息，那什么时候写进去的呢
         storm-base (.storm-base (:storm-cluster-state nimbus) storm-id nil)
         topology-conf (read-storm-conf conf storm-id)
         topology (read-storm-topology conf storm-id)
@@ -610,6 +645,12 @@
         ;; 这里已经有了所有 supervisor 的信息，是否应该修改 topologies 的并发度？
         ;; 这里也有所有supervisor的信息，比如cpu/memory之类的，这里应该更改num workers 和 parallelism
         supervisors (read-all-supervisor-details nimbus all-scheduling-slots supervisor->dead-ports)
+        ;; 针对当前的状况，决定是否要进行调度
+        _ (auto-balance nimbus topologies supervisors)
+        ;; 1.是否先更改num-workers, 但是有很多topology，所有的topology的num-workers都需要修改吗？
+        ;; 2.是否要和之前的superviors的数目进行比较？看看是增加了还是减少了
+        
+
         cluster (Cluster. (:inimbus nimbus) supervisors topology->scheduler-assignment)
 
         ;; call scheduler.schedule to schedule all the topologies
@@ -621,8 +662,6 @@
         ;; add more information to convert SchedulerAssignment to Assignment
         new-topology->executor->node+port (compute-topology->executor->node+port new-scheduler-assignments)]
 
-    ;; log所有的supervisors信息
-    (log-message "All Supervisors: " supervisors)
     ;; print some useful information.
     (doseq [[topology-id executor->node+port] new-topology->executor->node+port
             :let [old-executor->node+port (-> topology-id
@@ -673,7 +712,6 @@
 ;; only keep existing slots that satisfy one of those slots. for rest, reassign them across remaining slots
 ;; edge case for slots with no executor timeout but with supervisor timeout... just treat these as valid slots that can be reassigned to. worst comes to worse the executor will timeout and won't assign here next time around
 (defnk mk-assignments [nimbus :scratch-topology-id nil]
-  (log-message "MAKE ASSIGNMENTS IS CALLED")
   (let [conf (:conf nimbus)
         storm-cluster-state (:storm-cluster-state nimbus)
         ^INimbus inimbus (:inimbus nimbus) 
@@ -754,11 +792,13 @@
         topology (system-topology! storm-conf (read-storm-topology conf storm-id))
         num-executors (->> (all-components topology) (map-val num-start-executors))]
     (log-message "Activating " storm-name ": " storm-id)
+    ;; 将storm相关的配置信息写入到 zk 中
     (.activate-storm! storm-cluster-state
                       storm-id
                       (StormBase. storm-name
                                   (current-time-secs)
                                   {:type topology-initial-status}
+                                  (storm-conf TOPOLOGY-WORKERS)
                                   (storm-conf TOPOLOGY-WORKERS)
                                   num-executors))))
 
@@ -988,6 +1028,7 @@
               (.setup-heartbeats! storm-cluster-state storm-id)
               (let [thrift-status->kw-status {TopologyInitialStatus/INACTIVE :inactive
                                               TopologyInitialStatus/ACTIVE :active}]
+                ;; 将topology相关的配置信息写入到zk中
                 (start-storm nimbus storm-name storm-id (thrift-status->kw-status (.get_initial_status submitOptions))))
               (mk-assignments nimbus)))
           (catch Throwable e

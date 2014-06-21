@@ -154,20 +154,69 @@
                         :num-workers
                         (:num-workers status))))
 
+;; 对executor中的信息进行提取
+;; 将{window {id count}} 简化为 {window ccount}
+(defn extract-executor-stats [stats]
+    (log-message "Stats " stats)
+    {:executed (->> (:executed stats) (map-val #(reduce + (vals %))))
+    ;; TODO latency 的计算直接相加的话是有问题的！！！
+     :execute-latencies (->> (:execute-latencies stats) (map-val #(reduce + (vals %))))
+    }
+)
+
+(defn compute-executor-capacity [executor]
+    (let [stats (-> executor (get :stats) (extract-executor-stats))
+          uptime (-> executor (get :uptime) (or 0))
+          window (if (< uptime 600) uptime 600)
+          executed (-> stats (get :executed) (get 600) (or 0))
+          latency (-> stats (get :execute-latencies) (get 600) (or 0))]
+          
+          (log-message "Executor Capacity " executed  " " latency)
+          ;; capacity = executed * latency / (window * 1000)
+          (if (> window 0)
+            (/ (* executed latency) (double (* window 1000)))
+            0)
+    )      
+)
+
 (defn topology-balance [nimbus num-supervisors topology]
-    (if (> num-supervisors (.getNumWorkers topology))
-        ((fn []
-            (log-message "update num workers to " num-supervisors " for " (.getId topology))
-            (update-parallelism nimbus (.getId topology) 
-                {:num-workers num-supervisors})
-            (.setNumWorkers topology num-supervisors)
-        ))
-        (log-message "nothing to chnage for topology " (.getId topology))
-        ))
+    (let [storm-cluster-state  (:storm-cluster-state nimbus)
+          storm-id (.getId topology)
+          assignment (.assignment-info storm-cluster-state storm-id nil)
+          executor->node+port (:executor->node+port assignment)
+          beats (.executor-beats storm-cluster-state storm-id executor->node+port)
+          executor-summaries (into {}
+                (for [[executor [node port]] executor->node+port]
+                    (let [heartbeat (get beats executor)
+                          stats (:stats heartbeat)]
+                          (if stats [executor {:stats stats, :uptime (:uptime heartbeat)}]))))
+          executor->component (.getExecutorToComponent topology)
+          executor->capacities (into {} 
+                (for [[executor summary] executor-summaries] 
+                    (if summary [executor (compute-executor-capacity summary)])))
+          component->capacities (reduce (fn [m [e c]] (let [existing (get m c [])]
+                (assoc m c (conj existing (get executor->capacities [(.getStartTask e) (.getEndTask e)] 0))))) 
+                {}
+                executor->component)
+          _ (log-message "Component Capacites" component->capacities)
+          component->parallelism (into {} (map (fn [entry] 
+                (let [max-capacity (apply max (val entry))
+                      old-parallelism (count (val entry))]
+                     (if (> max-capacity 0.9)
+                        [(key entry) (* 2 old-parallelism)]))
+                ) 
+                component->capacities))
+           status {:component->executors component->parallelism}
+          ;; 继续计算需要的num-workers的数目 ?
+        ]
+        (log-message "Component Parallelism " status)
+        (update-parallelism nimbus storm-id status)
+        (log-message "Update Parallelism for " storm-id)
+    ))
 
 ;; 根据supervisors的信息，自动对所有的topology进行重新调度
 ;; 默认在每个supervisors上都占有一个worker
-(defn auto-balance [nimbus topologies supervisors]
+(defn auto-balance [nimbus supervisors topologies]
     (let [num-supervisors (count supervisors)]
           (->> topologies
                .getTopologies
@@ -646,7 +695,7 @@
         ;; 这里也有所有supervisor的信息，比如cpu/memory之类的，这里应该更改num workers 和 parallelism
         supervisors (read-all-supervisor-details nimbus all-scheduling-slots supervisor->dead-ports)
         ;; 针对当前的状况，决定是否要进行调度
-        _ (auto-balance nimbus topologies supervisors)
+        _ (auto-balance nimbus supervisors topologies)
         ;; 1.是否先更改num-workers, 但是有很多topology，所有的topology的num-workers都需要修改吗？
         ;; 2.是否要和之前的superviors的数目进行比较？看看是增加了还是减少了
         

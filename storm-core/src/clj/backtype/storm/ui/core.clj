@@ -307,6 +307,7 @@
 
 (defn aggregate-counts [counts-seq]
   (->> counts-seq
+       ;; 将 java.util.Map 转换成 clojure map
        (map clojurify-structure)
        (apply merge-with
               (fn [s1 s2]
@@ -347,6 +348,7 @@
     stream-summary))
 
 (defn aggregate-bolt-stats [stats-seq include-sys?]
+  ;; 确保 stats-seq 是一个列表
   (let [stats-seq (collectify stats-seq)]
     (merge (pre-process (aggregate-common-stats stats-seq) include-sys?)
            {:acked
@@ -539,14 +541,17 @@
                     swap-map-order
                     (get "600")))
         uptime (nil-to-zero (.get_uptime_secs e))
+        ;; 如果uptime < 600,就是uptime，否则是600,单位是秒?
         window (if (< uptime 600) uptime 600)
         executed (-> stats :executed nil-to-zero)
         latency (-> stats :execute-latencies nil-to-zero)
         ]
    (if (> window 0)
+     ;; executed * latency / (windows*1000)
      (div (* executed latency) (* 1000 window))
      )))
 
+;; bolt的capacity = max(executors' capacity)
 (defn compute-bolt-capacity [executors]
   (->> executors
        (map compute-executor-capacity)
@@ -949,6 +954,7 @@
 (defn bolt-page [window ^TopologyInfo topology-info component executors include-sys?]
   (let [window-hint (str " (" (window-hint window) ")")
         stats (get-filled-stats executors)
+        ;; 合并所有executors的信息
         stream-summary (-> stats (aggregate-bolt-stats include-sys?))
         summary (-> stream-summary aggregate-bolt-streams)]
     (concat

@@ -115,8 +115,11 @@
        :kill-time-secs delay})
     ))
 
+;; 这个函数的返回值也是一个函数
+;; 先将topology的状态修改为rebalancing,然后执行do-rebalance event
 (defn rebalance-transition [nimbus storm-id status]
   (fn [time num-workers executor-overrides]
+    ;; 获取延迟执行的时间
     (let [delay (if time
                   time
                   (get (read-storm-conf (:conf nimbus) storm-id)
@@ -125,6 +128,7 @@
                    storm-id
                    delay
                    :do-rebalance)
+      ;; 执行do-rebalance的时候topology的状态已经是rebalacing
       {:type :rebalancing
        :delay-secs delay
        :old-status status
@@ -201,10 +205,24 @@
           _ (log-message "Component Capacites" component->capacities)
           component->parallelism (into {} (map (fn [entry] 
                 (let [max-capacity (apply max (val entry))
+                      lower-count (count (filter (fn [x] (<= x 0.5)) (val entry)))
+                      sum-capacity (reduce + (val entry))
                       old-parallelism (count (val entry))]
-                     (if (> max-capacity 0.9)
-                        [(key entry) (* 2 old-parallelism)]))
-                ) 
+                     (cond 
+                        ;; 其中一个executor的负载过高
+                        (> max-capacity 0.9)
+                        (let [new-parallelism (inc (int (/ sum-capacity 0.8)))]
+                            (if (>= old-parallelism new-parallelism)
+                                [(key entry) (+ 2 old-parallelism)]
+                                [(key entry) new-parallelism]))
+                        ;; 所有executor的负载都很低,且executor的数目大于1,应该连续监控一段时间
+                        ;;(and  (= lower-count old-parallelism) (> old-parallelism 1))
+                        ;;(let [new-parallelism (inc (int (/ sum-capacity 0.8)))]
+                        ;;    (if (>= new-parallelism old-parallelism)
+                        ;;        [(key entry) (- old-parallelism 1)]
+                        ;;        [(key entry) new-parallelism]))
+                     )
+                )) 
                 component->capacities))
            status {:component->executors component->parallelism}
           ;; 继续计算需要的num-workers的数目 ?
@@ -227,6 +245,7 @@
 
 
 ;; 定义topology的状态转换
+;; 这个status不会包含num-workers 和 executors 吧 ？
 (defn state-transitions [nimbus storm-id status]
   {:active {:inactivate :inactive            
             :activate nil
@@ -259,13 +278,20 @@
                  :do-rebalance (fn []
                                  (do-rebalance nimbus storm-id status)
                                  (:old-status status))
+                 ;; do-rebalance 的返回值是一个status的原来的值
                  }})
 
 (defn topology-status [nimbus storm-id]
-  (-> nimbus :storm-cluster-state (.storm-base storm-id nil) :status))
+  ;;(-> nimbus :storm-cluster-state (.storm-base storm-id nil) :status))
+    (let [storm-base (-> nimbus :storm-cluster-state (.storm-base storm-id nil))
+          status (:status storm-base)]
+          (log-message "Storm Base " storm-base)
+          (log-message "Stom Status " status)
+          status))
 
 ;; 该函数的原型是 transition! [nimbus storm-id event error-on-no-transition?]
 ;; 其中 error-on-no-transition? 的默认值为 false
+;; status 是通过 topology-status 获取的
 (defn transition!
   ([nimbus storm-id event]
      (transition! nimbus storm-id event false))
@@ -274,7 +300,7 @@
        ;; system-events 是 hash-set
        (let [system-events #{:startup}
              [event & event-args] (if (keyword? event) [event] event)
-             status (topology-status nimbus storm-id)]
+             status (topology-status nimbus storm-id)] ;; status 是包含num-workers的
          ;; handles the case where event was scheduled but topology has been removed
          (if-not status
            (log-message "Cannot apply event " event " to " storm-id " because topology no longer exists")
@@ -293,8 +319,9 @@
                  ;; 首先获取当前状态下topology可以转换的状态集合
                  ;; 然后调用get-event,将当前状态集合中的event的值赋给transition
                  transition (-> (state-transitions nimbus storm-id status)
-                                (get (:type status))
-                                (get-event event))
+                                ;; 上面的函数会返回一个状态转换表
+                                (get (:type status)) ;; 获取当前状态的转换表
+                                (get-event event)) ;; 获取状态转换函数 (rebalance-transition nimbus storm-id status)的结果
                  ;; 如果transition是nil或者关键词，则返回一个函数
                  ;; 该函数不接受参数，且直接返回transition的值
                  transition (if (or (nil? transition)
@@ -308,7 +335,7 @@
                  new-status (if (keyword? new-status)
                               {:type new-status}
                               new-status)]
-
+                 (log-message "New Status " new-status)
              ;; 将新的状态写入到 zk
              (when new-status
                (set-topology-status! nimbus storm-id new-status)))))

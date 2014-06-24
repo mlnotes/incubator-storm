@@ -183,9 +183,26 @@
     )      
 )
 
+(defn set-over-lower-times [component-name 
+                component->overtimes 
+                component->lowertimes 
+                overtimes lowertimes]
+    (log-message "set-over-lower-times " component-name " " overtimes " " lowertimes)
+    (log-message "class of Overtimes " (class component->overtimes))
+    (log-message "class of Lowertimes " (class component->lowertimes))
+    (.put component->overtimes component-name overtimes)
+    (.put component->lowertimes component-name lowertimes))
+
+(defn java-map-to-map [java-map]
+    (into {} (map (fn [entry] entry) java-map)))
+
 (defn topology-balance [nimbus num-supervisors topology]
     (let [storm-cluster-state  (:storm-cluster-state nimbus)
           storm-id (.getId topology)
+          storm-status (-> storm-cluster-state (.storm-base storm-id nil) :status)
+          _ (log-message "Read from zk status " storm-status)
+          component->overtimes (:component->overtimes storm-status)
+          component->lowertimes (:component->lowertimes storm-status)
           assignment (.assignment-info storm-cluster-state storm-id nil)
           executor->node+port (:executor->node+port assignment)
           beats (.executor-beats storm-cluster-state storm-id executor->node+port)
@@ -203,32 +220,74 @@
                 {}
                 executor->component)
           _ (log-message "Component Capacites" component->capacities)
+          new-component->overtimes (java.util.HashMap.)
+          new-component->lowertimes (java.util.HashMap.)
           component->parallelism (into {} (map (fn [entry] 
-                (let [max-capacity (apply max (val entry))
-                      lower-count (count (filter (fn [x] (<= x 0.5)) (val entry)))
-                      sum-capacity (reduce + (val entry))
-                      old-parallelism (count (val entry))]
-                     (cond 
-                        ;; 其中一个executor的负载过高
-                        (> max-capacity 0.9)
-                        (let [new-parallelism (inc (int (/ sum-capacity 0.8)))]
-                            (if (>= old-parallelism new-parallelism)
-                                [(key entry) (+ 2 old-parallelism)]
-                                [(key entry) new-parallelism]))
-                        ;; 所有executor的负载都很低,且executor的数目大于1,应该连续监控一段时间
-                        ;;(and  (= lower-count old-parallelism) (> old-parallelism 1))
-                        ;;(let [new-parallelism (inc (int (/ sum-capacity 0.8)))]
-                        ;;    (if (>= new-parallelism old-parallelism)
-                        ;;        [(key entry) (- old-parallelism 1)]
-                        ;;        [(key entry) new-parallelism]))
-                     )
-                )) 
-                component->capacities))
-           status {:component->executors component->parallelism}
+            (let [component-name (key entry)
+                  max-capacity (apply max (val entry))
+                  sum-capacity (reduce + (val entry))
+                  lower-count (count (filter (fn [x] (<= x 0.5)) (val entry)))
+                  old-parallelism (count (val entry))]
+                  (log-message "Lower Count " lower-count " " old-parallelism)
+                  (cond
+                    (> max-capacity 0.9)
+                    (let [overtimes (or (get component->overtimes component-name) 0)]
+                         (if (> overtimes 5)
+                            (let [new-parallelism (inc (int (/ sum-capacity 0.8)))]
+                                (set-over-lower-times component-name 
+                                    new-component->overtimes new-component->lowertimes 
+                                    0 0)
+                                (if (>= old-parallelism new-parallelism)
+                                    [component-name (+ 2 old-parallelism)]
+                                    [component-name new-parallelism])
+                            )
+                            (set-over-lower-times component-name 
+                                new-component->overtimes new-component->lowertimes 
+                                (inc overtimes) 0)
+                          )
+                    )
+                    (and (= lower-count old-parallelism) (> old-parallelism 1))
+                    (let [lowertimes (or (get component->lowertimes component-name) 0)]
+                         (if (> lowertimes 15)
+                            (let [new-parallelism (inc (int (/ sum-capacity 0.8)))]
+                                (set-over-lower-times component-name 
+                                    new-component->overtimes new-component->lowertimes 
+                                    0 0)
+                                (if (<= old-parallelism new-parallelism)
+                                    [component-name (- old-parallelism 1)]
+                                    [component-name new-parallelism])
+                            )
+                            (set-over-lower-times component-name 
+                                new-component->overtimes new-component->lowertimes 
+                                0 (inc lowertimes))
+                         )
+                    )
+                    :else
+                    (set-over-lower-times component-name 
+                            new-component->overtimes new-component->lowertimes 
+                            0 0)
+                  )
+            ))
+            component->capacities))
+          
+          component->overtimes (java-map-to-map new-component->overtimes)
+          component->lowertimes (java-map-to-map new-component->lowertimes)
+          new-storm-status (assoc storm-status
+                                :component->overtimes 
+                                component->overtimes
+                                :component->lowertimes
+                                component->lowertimes)
+
+          parallelism-args {:component->executors component->parallelism}
           ;; 继续计算需要的num-workers的数目 ?
         ]
-        (log-message "Component Parallelism " status)
-        (update-parallelism nimbus storm-id status)
+        (log-message "New Storm Status " new-storm-status)
+        ;; 将新的overtimes和lowertimes写入zk
+        (set-topology-status! nimbus storm-id new-storm-status)
+
+        (log-message "Component Parallelism " parallelism-args)
+        ;; 更新 executor parallelism 信息
+        (update-parallelism nimbus storm-id parallelism-args)
         (log-message "Update Parallelism for " storm-id)
     ))
 

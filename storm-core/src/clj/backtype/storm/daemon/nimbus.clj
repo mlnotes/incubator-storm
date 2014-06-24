@@ -183,15 +183,12 @@
     )      
 )
 
-(defn set-over-lower-times [component-name 
+(defn set-over-under-times [component-name 
                 component->overtimes 
-                component->lowertimes 
-                overtimes lowertimes]
-    (log-message "set-over-lower-times " component-name " " overtimes " " lowertimes)
-    (log-message "class of Overtimes " (class component->overtimes))
-    (log-message "class of Lowertimes " (class component->lowertimes))
+                component->undertimes 
+                overtimes undertimes]
     (.put component->overtimes component-name overtimes)
-    (.put component->lowertimes component-name lowertimes))
+    (.put component->undertimes component-name undertimes))
 
 (defn java-map-to-map [java-map]
     (into {} (map (fn [entry] entry) java-map)))
@@ -202,7 +199,7 @@
           storm-status (-> storm-cluster-state (.storm-base storm-id nil) :status)
           _ (log-message "Read from zk status " storm-status)
           component->overtimes (:component->overtimes storm-status)
-          component->lowertimes (:component->lowertimes storm-status)
+          component->undertimes (:component->undertimes storm-status)
           assignment (.assignment-info storm-cluster-state storm-id nil)
           executor->node+port (:executor->node+port assignment)
           beats (.executor-beats storm-cluster-state storm-id executor->node+port)
@@ -224,16 +221,16 @@
                 {}
                 executor->component)
           _ (log-message "Component Capacites" component->capacities)
-          lower-threshold 0.3
+          under-threshold 0.3
           over-threshold 0.95
           new-component->overtimes (java.util.HashMap.)
-          new-component->lowertimes (java.util.HashMap.)
+          new-component->undertimes (java.util.HashMap.)
           component->parallelism (into {} (map (fn [entry] 
             (let [component-name (key entry)
                   max-capacity (apply max (val entry))
                   sum-capacity (reduce + (val entry))
                   ;; 负载低于多少算低？
-                  lower-count (count (filter (fn [x] (<= x lower-threshold)) (val entry)))
+                  under-count (count (filter (fn [x] (<= x under-threshold)) (val entry)))
                   old-parallelism (count (val entry))]
                   (cond
                     (> max-capacity over-threshold)
@@ -243,37 +240,37 @@
                          (if (and (> overtimes 5) (> num-tasks old-parallelism))
                             ;; 增加的时候应该直接变成双倍
                             (let [new-parallelism (inc (int (/ sum-capacity 0.5)))]
-                                (set-over-lower-times component-name 
-                                    new-component->overtimes new-component->lowertimes 
+                                (set-over-under-times component-name 
+                                    new-component->overtimes new-component->undertimes 
                                     0 0)
                                 (if (>= old-parallelism new-parallelism)
                                     [component-name (+ 2 old-parallelism)]
                                     [component-name new-parallelism])
                             )
-                            (set-over-lower-times component-name 
-                                new-component->overtimes new-component->lowertimes 
+                            (set-over-under-times component-name 
+                                new-component->overtimes new-component->undertimes 
                                 (inc overtimes) 0)
                           )
                     )
-                    (and (= lower-count old-parallelism) (> old-parallelism 1))
-                    (let [lowertimes (or (get component->lowertimes component-name) 0)]
-                         (if (> lowertimes 15)
+                    (and (= under-count old-parallelism) (> old-parallelism 1))
+                    (let [undertimes (or (get component->undertimes component-name) 0)]
+                         (if (> undertimes 15)
                             (let [new-parallelism (inc (int (/ sum-capacity 0.8)))]
-                                (set-over-lower-times component-name 
-                                    new-component->overtimes new-component->lowertimes 
+                                (set-over-under-times component-name 
+                                    new-component->overtimes new-component->undertimes 
                                     0 0)
                                 (if (<= old-parallelism new-parallelism)
                                     [component-name (- old-parallelism 1)]
                                     [component-name new-parallelism])
                             )
-                            (set-over-lower-times component-name 
-                                new-component->overtimes new-component->lowertimes 
-                                0 (inc lowertimes))
+                            (set-over-under-times component-name 
+                                new-component->overtimes new-component->undertimes 
+                                0 (inc undertimes))
                          )
                     )
                     :else
-                    (set-over-lower-times component-name 
-                            new-component->overtimes new-component->lowertimes 
+                    (set-over-under-times component-name 
+                            new-component->overtimes new-component->undertimes 
                             0 0)
                   )
             ))
@@ -282,20 +279,20 @@
           component->overtimes (if (= (count component->parallelism) 0)
                                    (java-map-to-map new-component->overtimes)
                                    {})
-          component->lowertimes (if (= (count component->parallelism) 0)
-                                    (java-map-to-map new-component->lowertimes)
+          component->undertimes (if (= (count component->parallelism) 0)
+                                    (java-map-to-map new-component->undertimes)
                                     {})
           new-storm-status (assoc storm-status
                                 :component->overtimes 
                                 component->overtimes
-                                :component->lowertimes
-                                component->lowertimes)
+                                :component->undertimes
+                                component->undertimes)
 
           parallelism-args {:component->executors component->parallelism}
           ;; 继续计算需要的num-workers的数目 ?
         ]
         (log-message "New Storm Status " new-storm-status)
-        ;; 将新的overtimes和lowertimes写入zk
+        ;; 将新的overtimes和undertimes写入zk
         (set-topology-status! nimbus storm-id new-storm-status)
 
         (log-message "Component Parallelism " parallelism-args)
@@ -1404,7 +1401,6 @@
   )
 
 (defn -launch [nimbus]
-  (log-message "Class of Nimbus " (class nimbus))
   (launch-server! (read-storm-config) nimbus))
 
 (defn standalone-nimbus []

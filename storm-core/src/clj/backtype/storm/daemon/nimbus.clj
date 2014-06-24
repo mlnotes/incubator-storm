@@ -212,6 +212,10 @@
                           stats (:stats heartbeat)]
                           (if stats [executor {:stats stats, :uptime (:uptime heartbeat)}]))))
           executor->component (.getExecutorToComponent topology)
+          component->num-tasks (reduce (fn [m [e c]] (let [cur-num (get m c 0)]
+                (assoc m c (+ cur-num (- (.getEndTask e) (.getStartTask e)) 1))))
+                {}
+                executor->component)
           executor->capacities (into {} 
                 (for [[executor summary] executor-summaries] 
                     (if summary [executor (compute-executor-capacity summary)])))
@@ -220,20 +224,25 @@
                 {}
                 executor->component)
           _ (log-message "Component Capacites" component->capacities)
+          lower-threshold 0.3
+          over-threshold 0.95
           new-component->overtimes (java.util.HashMap.)
           new-component->lowertimes (java.util.HashMap.)
           component->parallelism (into {} (map (fn [entry] 
             (let [component-name (key entry)
                   max-capacity (apply max (val entry))
                   sum-capacity (reduce + (val entry))
-                  lower-count (count (filter (fn [x] (<= x 0.5)) (val entry)))
+                  ;; 负载低于多少算低？
+                  lower-count (count (filter (fn [x] (<= x lower-threshold)) (val entry)))
                   old-parallelism (count (val entry))]
-                  (log-message "Lower Count " lower-count " " old-parallelism)
                   (cond
-                    (> max-capacity 0.9)
-                    (let [overtimes (or (get component->overtimes component-name) 0)]
-                         (if (> overtimes 5)
-                            (let [new-parallelism (inc (int (/ sum-capacity 0.8)))]
+                    (> max-capacity over-threshold)
+                    (let [overtimes (or (get component->overtimes component-name) 0)
+                          num-tasks (or (get component->num-tasks component-name) 0)]
+                         ;; 需要考虑task的数目，确保old-parallelism <= task数目
+                         (if (and (> overtimes 5) (> num-tasks old-parallelism))
+                            ;; 增加的时候应该直接变成双倍
+                            (let [new-parallelism (inc (int (/ sum-capacity 0.5)))]
                                 (set-over-lower-times component-name 
                                     new-component->overtimes new-component->lowertimes 
                                     0 0)
@@ -270,8 +279,12 @@
             ))
             component->capacities))
           
-          component->overtimes (java-map-to-map new-component->overtimes)
-          component->lowertimes (java-map-to-map new-component->lowertimes)
+          component->overtimes (if (= (count component->parallelism) 0)
+                                   (java-map-to-map new-component->overtimes)
+                                   {})
+          component->lowertimes (if (= (count component->parallelism) 0)
+                                    (java-map-to-map new-component->lowertimes)
+                                    {})
           new-storm-status (assoc storm-status
                                 :component->overtimes 
                                 component->overtimes

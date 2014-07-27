@@ -161,7 +161,6 @@
 ;; 对executor中的信息进行提取
 ;; 将{window {id count}} 简化为 {window ccount}
 (defn extract-executor-stats [stats]
-    (log-message "Stats " stats)
     {:executed (->> (:executed stats) (map-val #(reduce + (vals %))))
     ;; TODO latency 的计算直接相加的话是有问题的！！！
      :execute-latencies (->> (:execute-latencies stats) (map-val #(reduce + (vals %))))
@@ -175,7 +174,6 @@
           executed (-> stats (get :executed) (get 600) (or 0))
           latency (-> stats (get :execute-latencies) (get 600) (or 0))]
           
-          (log-message "Executor Capacity " executed  " " latency)
           ;; capacity = executed * latency / (window * 1000)
           (if (> window 0)
             (/ (* executed latency) (double (* window 1000)))
@@ -625,6 +623,7 @@
          reverse-map
          (map-val sort)
          (join-maps component->executors)
+         ;; 根据component的并行化，将task分配各不同的executor
          (map-val (partial apply partition-fixed))
          (mapcat second)
          (map to-executor-id)
@@ -702,7 +701,6 @@
                                                     ;; these dead-ports can be reused in next round of assignments
                                                     all-ports (-> (get all-scheduling-slots sid)
                                                                   (set/difference dead-ports)
-																  ((fn [ports] (log-message "PORTS" (str ports)) ports))
                                                                   ((fn [ports] (map int ports))))
                                                     supervisor-details (SupervisorDetails. sid hostname scheduler-meta all-ports cpu total-mem used-mem)]]
                                           {sid supervisor-details}))]
@@ -791,6 +789,9 @@
         ;; 这里也有所有supervisor的信息，比如cpu/memory之类的，这里应该更改num workers 和 parallelism
         supervisors (read-all-supervisor-details nimbus all-scheduling-slots supervisor->dead-ports)
         ;; 针对当前的状况，决定是否要进行调度
+        ;; 主要是修改 executor 和 worker的数目
+        ;; 这里修改的结果只会影响下一次调度的结果
+        ;; 这次的调度是根据上次的num workers 和 num executors
         _ (auto-balance nimbus supervisors topologies)
         ;; 1.是否先更改num-workers, 但是有很多topology，所有的topology的num-workers都需要修改吗？
         ;; 2.是否要和之前的superviors的数目进行比较？看看是增加了还是减少了

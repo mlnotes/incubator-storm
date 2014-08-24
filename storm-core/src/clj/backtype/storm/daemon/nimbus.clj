@@ -194,10 +194,13 @@
 (defn topology-balance [nimbus num-supervisors topology]
     (let [storm-cluster-state  (:storm-cluster-state nimbus)
           storm-id (.getId topology)
+          old-workers (.getNumWorkers topology)
           storm-status (-> storm-cluster-state (.storm-base storm-id nil) :status)
           _ (log-message "Read from zk status " storm-status)
           component->overtimes (:component->overtimes storm-status)
           component->undertimes (:component->undertimes storm-status)
+          inc-times (or (:inc-times storm-status) 0)
+          dec-times (or (:dec-times storm-status) 0)
           assignment (.assignment-info storm-cluster-state storm-id nil)
           executor->node+port (:executor->node+port assignment)
           beats (.executor-beats storm-cluster-state storm-id executor->node+port)
@@ -253,6 +256,7 @@
                     (and (= under-count old-parallelism) (> old-parallelism 1))
                     (let [undertimes (or (get component->undertimes component-name) 0)]
                          (if (> undertimes 15)
+                            ;; 符合条件，调整并行度，将计数全部归零
                             (let [new-parallelism (inc (int (/ sum-capacity 0.8)))]
                                 (set-over-under-times component-name 
                                     new-component->overtimes new-component->undertimes 
@@ -261,6 +265,7 @@
                                     [component-name (- old-parallelism 1)]
                                     [component-name new-parallelism])
                             )
+                            ;; 不符合条件，不调整并行度，继续计数
                             (set-over-under-times component-name 
                                 new-component->overtimes new-component->undertimes 
                                 0 (inc undertimes))
@@ -274,20 +279,60 @@
             ))
             component->capacities))
           
+          ;; 为什么component->parallelism != 0的时候，overtimes/undertiems反而是空 ？
+          ;; 因为parallelism!=0的话，说明要调整并行度，而此时应该清空所有的计数
           component->overtimes (if (= (count component->parallelism) 0)
                                    (java-map-to-map new-component->overtimes)
                                    {})
           component->undertimes (if (= (count component->parallelism) 0)
                                     (java-map-to-map new-component->undertimes)
                                     {})
+          ;; 计算delta executors
+          delta-executors (reduce (fn [s entry] 
+                                (let [component-name (key entry)
+                                      old-executors (count (get component->capacities component-name))
+                                      delta (- (val entry) old-executors)]
+                                     (+ s delta)))
+                                0
+                                component->parallelism)
+          inc-times (cond (> delta-executors 0)
+                            (inc inc-times)
+                            (< 0 delta-executors)
+                            0
+                            :else
+                            inc-times)
+          dec-times (cond (< delta-executors 0)
+                            (inc dec-times)
+                            (> delta-executors 0)
+                            0
+                            :else
+                            dec-times)
+          
+          _ (log-message "inc-times " inc-times " dec-times " dec-times)
+          num-workers (cond (> inc-times 3)
+                             (+ old-workers 2)
+                             (> dec-times 3)
+                             (if (> old-workers 2)(- old-workers 2) 1))
+
+          ;; 一旦需要调节num-workers的话，则重置inc-times 和 dec-times
+          inc-times (if (= num-workers nil) inc-times 0)
+          dec-times (if (= num-workers nil) dec-times 0)
+
           new-storm-status (assoc storm-status
                                 :component->overtimes 
                                 component->overtimes
                                 :component->undertimes
-                                component->undertimes)
+                                component->undertimes
+                                :inc-times
+                                inc-times
+                                :dec-times
+                                dec-times)
 
-          parallelism-args {:component->executors component->parallelism}
-          ;; 继续计算需要的num-workers的数目 ?
+          parallelism-args (if (= num-workers nil)
+                                 {:component->executors component->parallelism}
+                                 {:component->executors component->parallelism
+                                  :num-workers num-workers})
+          
         ]
         (log-message "New Storm Status " new-storm-status)
         ;; 将新的overtimes和undertimes写入zk
@@ -306,7 +351,9 @@
           (->> topologies
                .getTopologies
                (map (partial topology-balance nimbus num-supervisors))
-               (doall))))
+               (doall)))
+    ;; 根据supervisors的信息，对worker的数目进行调整
+)
         
         
 

@@ -191,6 +191,64 @@
 (defn java-map-to-map [java-map]
     (into {} (map (fn [entry] entry) java-map)))
 
+(defn calc-parallelism [component->overtimes 
+            component->undertimes 
+            component->num-tasks 
+            new-component->overtimes 
+            new-component->undertimes
+            entry]
+	(let [under-threshold 0.3
+		 over-threshold 0.95
+		 component-name (key entry)
+		 max-capacity (apply max (val entry))
+         sum-capacity (reduce + (val entry))
+         ;; 负载低于多少算低？
+         under-count (count (filter (fn [x] (<= x under-threshold)) (val entry)))
+         old-parallelism (count (val entry))]
+        (cond
+			(> max-capacity over-threshold)
+			(let [overtimes (or (get component->overtimes component-name) 0)
+                 num-tasks (or (get component->num-tasks component-name) 0)]
+                ;; 需要考虑task的数目，确保old-parallelism <= task数目
+                (if (and (> overtimes 5) (> num-tasks old-parallelism))
+					;; 增加的时候应该直接变成双倍
+					(let [new-parallelism (inc (int (/ sum-capacity 0.5)))]
+						(set-over-under-times component-name 
+                           new-component->overtimes new-component->undertimes 
+                           0 0)
+						(if (>= old-parallelism new-parallelism)
+							[component-name (+ 2 old-parallelism)]
+							[component-name new-parallelism])
+					)
+					(set-over-under-times component-name 
+                       new-component->overtimes new-component->undertimes 
+                       (inc overtimes) 0)
+                )
+			)
+			(and (= under-count old-parallelism) (> old-parallelism 1))
+			(let [undertimes (or (get component->undertimes component-name) 0)]
+                (if (> undertimes 15)
+					;; 符合条件，调整并行度，将计数全部归零
+					(let [new-parallelism (inc (int (/ sum-capacity 0.8)))]
+						(set-over-under-times component-name 
+                           new-component->overtimes new-component->undertimes 
+                           0 0)
+						(if (<= old-parallelism new-parallelism)
+							[component-name (- old-parallelism 1)]
+							[component-name new-parallelism])
+					)
+					;; 不符合条件，不调整并行度，继续计数
+					(set-over-under-times component-name 
+                       new-component->overtimes new-component->undertimes 
+                       0 (inc undertimes))
+                )
+			)
+			:else
+			(set-over-under-times component-name 
+                   new-component->overtimes new-component->undertimes 
+                   0 0)
+			)))
+
 (defn topology-balance [nimbus num-supervisors topology]
     (let [storm-cluster-state  (:storm-cluster-state nimbus)
           storm-id (.getId topology)
@@ -222,61 +280,15 @@
                 {}
                 executor->component)
           _ (log-message "Component Capacites" component->capacities)
-          under-threshold 0.3
-          over-threshold 0.95
           new-component->overtimes (java.util.HashMap.)
           new-component->undertimes (java.util.HashMap.)
-          component->parallelism (into {} (map (fn [entry] 
-            (let [component-name (key entry)
-                  max-capacity (apply max (val entry))
-                  sum-capacity (reduce + (val entry))
-                  ;; 负载低于多少算低？
-                  under-count (count (filter (fn [x] (<= x under-threshold)) (val entry)))
-                  old-parallelism (count (val entry))]
-                  (cond
-                    (> max-capacity over-threshold)
-                    (let [overtimes (or (get component->overtimes component-name) 0)
-                          num-tasks (or (get component->num-tasks component-name) 0)]
-                         ;; 需要考虑task的数目，确保old-parallelism <= task数目
-                         (if (and (> overtimes 5) (> num-tasks old-parallelism))
-                            ;; 增加的时候应该直接变成双倍
-                            (let [new-parallelism (inc (int (/ sum-capacity 0.5)))]
-                                (set-over-under-times component-name 
-                                    new-component->overtimes new-component->undertimes 
-                                    0 0)
-                                (if (>= old-parallelism new-parallelism)
-                                    [component-name (+ 2 old-parallelism)]
-                                    [component-name new-parallelism])
-                            )
-                            (set-over-under-times component-name 
-                                new-component->overtimes new-component->undertimes 
-                                (inc overtimes) 0)
-                          )
-                    )
-                    (and (= under-count old-parallelism) (> old-parallelism 1))
-                    (let [undertimes (or (get component->undertimes component-name) 0)]
-                         (if (> undertimes 15)
-                            ;; 符合条件，调整并行度，将计数全部归零
-                            (let [new-parallelism (inc (int (/ sum-capacity 0.8)))]
-                                (set-over-under-times component-name 
-                                    new-component->overtimes new-component->undertimes 
-                                    0 0)
-                                (if (<= old-parallelism new-parallelism)
-                                    [component-name (- old-parallelism 1)]
-                                    [component-name new-parallelism])
-                            )
-                            ;; 不符合条件，不调整并行度，继续计数
-                            (set-over-under-times component-name 
-                                new-component->overtimes new-component->undertimes 
-                                0 (inc undertimes))
-                         )
-                    )
-                    :else
-                    (set-over-under-times component-name 
-                            new-component->overtimes new-component->undertimes 
-                            0 0)
-                  )
-            ))
+          component->parallelism (into {} (map
+            (partial calc-parallelism 
+                component->overtimes 
+                component->undertimes 
+                component->num-tasks 
+                new-component->overtimes 
+                new-component->undertimes)
             component->capacities))
           
           ;; 为什么component->parallelism != 0的时候，overtimes/undertiems反而是空 ？
